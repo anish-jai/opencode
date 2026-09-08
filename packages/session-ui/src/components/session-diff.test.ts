@@ -132,4 +132,41 @@ describe("session diff", () => {
     expect(text(view, "deletions")).toBe("")
     expect(text(view, "additions")).toBe("")
   })
+
+  test("keeps single hunks that start after the first line partial", () => {
+    const fileDiff = resolveFileDiff({
+      file: "a.ts",
+      patch:
+        "Index: a.ts\n===================================================================\n--- a.ts\t\n+++ a.ts\t\n@@ -5,2 +5,2 @@\n one\n-two\n+three\n",
+    })
+
+    expect(fileDiff.isPartial).toBe(true)
+    expect(fileDiff.additionLines).toEqual(["one\n", "three\n"])
+  })
+
+  test("drops the final newline on both sides after a trailing context line", () => {
+    const view = normalize({
+      file: "a.ts",
+      patch:
+        "Index: a.ts\n===================================================================\n--- a.ts\t\n+++ a.ts\t\n@@ -1,2 +1,2 @@\n-two\n+three\n one\n\\ No newline at end of file\n",
+      additions: 1,
+      deletions: 1,
+      status: "modified" as const,
+    })
+
+    expect(view.fileDiff.isPartial).toBe(false)
+    expect(text(view, "deletions")).toBe("two\none")
+    expect(text(view, "additions")).toBe("three\none")
+  })
+
+  test("keeps patches with blank hunk lines partial", () => {
+    const fileDiff = resolveFileDiff({
+      file: "a.ts",
+      patch:
+        "Index: a.ts\n===================================================================\n--- a.ts\t\n+++ a.ts\t\n@@ -1,3 +1,3 @@\n one\n\n-two\n+three\n",
+    })
+
+    expect(fileDiff.name).toBe("a.ts")
+    expect(fileDiff.isPartial).toBe(true)
+  })
 })

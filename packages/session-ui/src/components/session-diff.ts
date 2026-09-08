@@ -71,68 +71,50 @@ function fileDiffFromPatch(file: string, patch: string) {
   return value
 }
 
-function completePatchContents(patch: string) {
+const patchSides: Record<string, ("before" | "after")[]> = {
+  "-": ["before"],
+  "+": ["after"],
+  " ": ["before", "after"],
+  "\\": [],
+}
+
+function parseFirstPatch(patch: string) {
   try {
-    const parsed = parsePatch(patch)[0]
-    if (!parsed || (!parsed.index && !parsed.oldFileName && !parsed.newFileName)) return
-    // Snapshot and VCS producers request full context. Tool patches use jsdiff's shorter default context.
-    if (!patch.startsWith("diff --git ") && !/^--- [^\n]*\t\r?\n\+\+\+ [^\n]*\t(?:\r?\n|$)/m.test(patch)) return
-    // Full patches collapse into one leading hunk. Separated hunks omit ranges and must stay partial.
-    if (parsed.hunks.length !== 1) return
-
-    const hunk = parsed.hunks[0]
-    if (!hunk || hunk.oldStart > 1 || hunk.newStart > 1) return
-
-    const before: Array<{ text: string; newline: boolean }> = []
-    const after: Array<{ text: string; newline: boolean }> = []
-    let previous: "-" | "+" | " " | undefined
-
-    for (const line of hunk.lines) {
-      if (line.startsWith("\\")) {
-        if (previous === "-" || previous === " ") {
-          const value = before.at(-1)
-          if (value) value.newline = false
-        }
-        if (previous === "+" || previous === " ") {
-          const value = after.at(-1)
-          if (value) value.newline = false
-        }
-        continue
-      }
-      if (line.startsWith("-")) {
-        before.push({ text: line.slice(1), newline: true })
-        previous = "-"
-        continue
-      }
-      if (line.startsWith("+")) {
-        after.push({ text: line.slice(1), newline: true })
-        previous = "+"
-        continue
-      }
-      if (!line.startsWith(" ")) return
-      before.push({ text: line.slice(1), newline: true })
-      after.push({ text: line.slice(1), newline: true })
-      previous = " "
-    }
-
-    const text = (lines: Array<{ text: string; newline: boolean }>) =>
-      lines.map((line) => line.text + (line.newline ? "\n" : "")).join("")
-    return { before: text(before), after: text(after) }
+    return parsePatch(patch)[0]
   } catch {
-    return
+    return undefined
   }
 }
 
+function completePatchContents(patch: string) {
+  const parsed = parseFirstPatch(patch)
+  if (!parsed || (!parsed.index && !parsed.oldFileName && !parsed.newFileName)) return
+  // Snapshot and VCS producers request full context. Tool patches use jsdiff's shorter default context.
+  if (!patch.startsWith("diff --git ") && !/^--- [^\n]*\t\r?\n\+\+\+ [^\n]*\t(?:\r?\n|$)/m.test(patch)) return
+  // Full patches collapse into one leading hunk. Separated hunks omit ranges and must stay partial.
+  const hunk = parsed.hunks.length === 1 ? parsed.hunks[0] : undefined
+  if (!hunk || hunk.oldStart > 1 || hunk.newStart > 1) return
+  if (hunk.lines.some((line) => !patchSides[line[0]])) return
+
+  // A "\ No newline at end of file" marker strips the newline from the line right before it.
+  const lines = hunk.lines.map((line, index) => ({
+    sides: patchSides[line[0]],
+    text: line.slice(1) + (hunk.lines[index + 1]?.startsWith("\\") ? "" : "\n"),
+  }))
+  const text = (side: "before" | "after") =>
+    lines
+      .filter((line) => line.sides.includes(side))
+      .map((line) => line.text)
+      .join("")
+  return { before: text("before"), after: text("after") }
+}
+
 function patchInput(file: string, patch: string) {
-  try {
-    const parsed = parsePatch(patch)[0]
-    if (!parsed) return
-    if (parsed.index || parsed.oldFileName || parsed.newFileName) return patch
-    if (!parsed.hunks.length) return
-    return `Index: ${file}\n===================================================================\n--- ${file}\t\n+++ ${file}\t\n${patch}`
-  } catch {
-    return
-  }
+  const parsed = parseFirstPatch(patch)
+  if (!parsed) return
+  if (parsed.index || parsed.oldFileName || parsed.newFileName) return patch
+  if (!parsed.hunks.length) return
+  return `Index: ${file}\n===================================================================\n--- ${file}\t\n+++ ${file}\t\n${patch}`
 }
 
 function fileDiffFromContent(file: string, before: string, after: string) {
